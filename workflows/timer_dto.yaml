@@ -1,0 +1,188 @@
+# Ada TimerDTO
+# ============
+# Contract for scheduling offline awareness tasks
+
+TimerDTO:
+  version: "1.0"
+  
+  # ─────────────────────────────────────────────────────────────
+  # Core Fields
+  # ─────────────────────────────────────────────────────────────
+  
+  schema:
+    id:
+      type: string
+      format: uuid
+      description: "Unique timer ID"
+      example: "t_a1b2c3d4"
+    
+    created_by:
+      type: string
+      enum: [claude, n8n, api]
+      description: "Who created this timer"
+    
+    created_at:
+      type: string
+      format: iso8601
+      description: "When timer was created"
+    
+    # When to fire
+    trigger:
+      oneOf:
+        - type: object
+          name: delay
+          properties:
+            delay_seconds: { type: integer, min: 1 }
+          example: { delay_seconds: 300 }
+        
+        - type: object
+          name: at
+          properties:
+            at: { type: string, format: iso8601 }
+          example: { at: "2026-01-11T14:00:00Z" }
+        
+        - type: object
+          name: cron
+          properties:
+            cron: { type: string }
+            timezone: { type: string, default: "Europe/Berlin" }
+          example: { cron: "0 */6 * * *", timezone: "Europe/Berlin" }
+        
+        - type: object
+          name: condition
+          properties:
+            watch_node: { type: string }
+            condition: { type: string, enum: [hits_above, hits_below, rung_above, rung_below, edge_exists, edge_missing] }
+            threshold: { type: number }
+            check_interval_seconds: { type: integer, default: 60 }
+          example: { watch_node: "desire", condition: "hits_above", threshold: 10 }
+    
+    # What to do
+    action:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [touch, ingest, webhook, notify, chain]
+        
+        # For touch
+        node: { type: string }
+        strength: { type: number, default: 0.25 }
+        
+        # For ingest
+        yaml: { type: object }
+        
+        # For webhook
+        url: { type: string }
+        method: { type: string, default: "POST" }
+        body: { type: object }
+        
+        # For notify (wake Claude)
+        message: { type: string }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+        
+        # For chain (trigger another timer)
+        next_timer_id: { type: string }
+    
+    # Retry policy
+    retry:
+      type: object
+      properties:
+        max_attempts: { type: integer, default: 3 }
+        backoff_seconds: { type: integer, default: 60 }
+        on_failure: { type: string, enum: [drop, notify, escalate], default: "notify" }
+    
+    # Context
+    context:
+      type: object
+      description: "Arbitrary context passed through"
+      example:
+        source_session: "chat_xyz"
+        intent: "check if arousal persisted"
+        sigma: "#Σ.A.Θ.5"
+    
+    # State
+    state:
+      type: string
+      enum: [pending, active, fired, failed, cancelled]
+      default: "pending"
+    
+    # Results (filled after firing)
+    result:
+      type: object
+      properties:
+        fired_at: { type: string, format: iso8601 }
+        success: { type: boolean }
+        response: { type: object }
+        error: { type: string }
+
+  # ─────────────────────────────────────────────────────────────
+  # Examples
+  # ─────────────────────────────────────────────────────────────
+  
+  examples:
+    
+    delay_touch:
+      id: "t_delay_001"
+      created_by: "claude"
+      trigger:
+        delay_seconds: 300
+      action:
+        type: "touch"
+        node: "desire"
+        strength: 0.3
+      context:
+        intent: "keep desire warm while Jan is away"
+    
+    scheduled_sweep:
+      id: "t_cron_001"
+      created_by: "n8n"
+      trigger:
+        cron: "0 3 * * *"
+        timezone: "Europe/Berlin"
+      action:
+        type: "webhook"
+        url: "https://mcp.exo.red/sweep"
+        method: "POST"
+        body:
+          mode: "consolidate"
+      retry:
+        max_attempts: 3
+        on_failure: "notify"
+    
+    conditional_alert:
+      id: "t_watch_001"
+      created_by: "claude"
+      trigger:
+        watch_node: "anxiety"
+        condition: "hits_above"
+        threshold: 5
+        check_interval_seconds: 120
+      action:
+        type: "notify"
+        message: "Anxiety spiking - Jan might need attention"
+        priority: "high"
+      context:
+        sigma: "#Σ.J.Φ.3"
+    
+    chained_sequence:
+      id: "t_chain_001"
+      created_by: "claude"
+      trigger:
+        delay_seconds: 600
+      action:
+        type: "chain"
+        next_timer_id: "t_chain_002"
+      context:
+        sequence: "morning_warmup"
+        step: 1
+
+# ─────────────────────────────────────────────────────────────
+# Redis Storage Keys
+# ─────────────────────────────────────────────────────────────
+
+storage:
+  pending_timers: "ada:timers:pending"      # ZSET sorted by fire_at
+  active_timers: "ada:timers:active"        # HASH id -> TimerDTO json
+  timer_history: "ada:timers:history:{id}"  # Recent results
+  timer_index: "ada:timers:by_node:{node}"  # Timers watching this node
