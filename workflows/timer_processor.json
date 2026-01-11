@@ -1,0 +1,112 @@
+{
+  "name": "Ada Timer Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "seconds", "secondsInterval": 30 }] }
+      },
+      "name": "Poll Every 30s",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonBody": "[\"ZRANGEBYSCORE\", \"ada:timers:pending\", \"0\", \"{{ Date.now() }}\", \"LIMIT\", \"0\", \"10\"]"
+      },
+      "name": "Get Due Timers",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.result.length > 0 }}", "value2": true }]
+        }
+      },
+      "name": "Has Timers?",
+      "type": "n8n-nodes-base.if",
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const timerIds = $json.result || [];\nconst items = [];\n\nfor (const id of timerIds) {\n  items.push({ json: { timer_id: id } });\n}\n\nreturn items;"
+      },
+      "name": "Split Timers",
+      "type": "n8n-nodes-base.code",
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"HGET\", \"ada:timers:active\", \"{{ $json.timer_id }}\"]"
+      },
+      "name": "Get Timer Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const timer = JSON.parse($json.result);\nconst action = timer.action;\n\nlet result = { timer, executed: false };\n\nswitch (action.type) {\n  case 'touch':\n    result.call = {\n      url: `${$env.ADA_POINT_URL}/point/${action.node}?s=${action.strength || 0.25}`,\n      method: 'GET'\n    };\n    break;\n  case 'webhook':\n    result.call = {\n      url: action.url,\n      method: action.method || 'POST',\n      body: action.body\n    };\n    break;\n  case 'notify':\n    result.notification = {\n      message: action.message,\n      priority: action.priority,\n      timer_id: timer.id\n    };\n    break;\n}\n\nreturn [{ json: result }];"
+      },
+      "name": "Build Action",
+      "type": "n8n-nodes-base.code",
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.call.url }}",
+        "method": "={{ $json.call.method }}",
+        "sendBody": true,
+        "jsonBody": "={{ JSON.stringify($json.call.body || {}) }}"
+      },
+      "name": "Execute Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"ZREM\", \"ada:timers:pending\", \"{{ $('Split Timers').item.json.timer_id }}\"]"
+      },
+      "name": "Remove From Pending",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1650, 200]
+    }
+  ],
+  "connections": {
+    "Poll Every 30s": {
+      "main": [[{ "node": "Get Due Timers", "type": "main", "index": 0 }]]
+    },
+    "Get Due Timers": {
+      "main": [[{ "node": "Has Timers?", "type": "main", "index": 0 }]]
+    },
+    "Has Timers?": {
+      "main": [
+        [{ "node": "Split Timers", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Split Timers": {
+      "main": [[{ "node": "Get Timer Data", "type": "main", "index": 0 }]]
+    },
+    "Get Timer Data": {
+      "main": [[{ "node": "Build Action", "type": "main", "index": 0 }]]
+    },
+    "Build Action": {
+      "main": [[{ "node": "Execute Action", "type": "main", "index": 0 }]]
+    },
+    "Execute Action": {
+      "main": [[{ "node": "Remove From Pending", "type": "main", "index": 0 }]]
+    }
+  }
+}
