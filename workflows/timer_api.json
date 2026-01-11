@@ -1,0 +1,149 @@
+{
+  "name": "Ada Timer API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "timer",
+        "responseMode": "responseNode"
+      },
+      "name": "Create Timer",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "timer/:id",
+        "responseMode": "responseNode"
+      },
+      "name": "Get Timer",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 350]
+    },
+    {
+      "parameters": {
+        "httpMethod": "DELETE",
+        "path": "timer/:id",
+        "responseMode": "responseNode"
+      },
+      "name": "Cancel Timer",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\nconst id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;\n\n// Calculate fire_at\nlet fire_at;\nif (body.trigger.delay_seconds) {\n  fire_at = Date.now() + (body.trigger.delay_seconds * 1000);\n} else if (body.trigger.at) {\n  fire_at = new Date(body.trigger.at).getTime();\n} else if (body.trigger.cron) {\n  // Cron handled separately\n  fire_at = Date.now();\n}\n\nconst timer = {\n  id,\n  created_by: body.created_by || 'api',\n  created_at: new Date().toISOString(),\n  trigger: body.trigger,\n  action: body.action,\n  retry: body.retry || { max_attempts: 3, on_failure: 'notify' },\n  context: body.context || {},\n  state: 'pending',\n  fire_at\n};\n\nreturn [{ json: { timer, fire_at } }];"
+      },
+      "name": "Build Timer",
+      "type": "n8n-nodes-base.code",
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"HSET\", \"ada:timers:active\", \"{{ $json.timer.id }}\", {{ JSON.stringify(JSON.stringify($json.timer)) }}]"
+      },
+      "name": "Store Timer",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"ZADD\", \"ada:timers:pending\", \"{{ $('Build Timer').item.json.fire_at }}\", \"{{ $('Build Timer').item.json.timer.id }}\"]"
+      },
+      "name": "Queue Timer",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { created: $('Build Timer').item.json.timer } }}"
+      },
+      "name": "Respond Create",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"HGET\", \"ada:timers:active\", \"{{ $json.params.id }}\"]"
+      },
+      "name": "Fetch Timer",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 350]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { timer: JSON.parse($json.result || 'null') } }}"
+      },
+      "name": "Respond Get",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [650, 350]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"HDEL\", \"ada:timers:active\", \"{{ $json.params.id }}\"]"
+      },
+      "name": "Delete Timer",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "jsonBody": "[\"ZREM\", \"ada:timers:pending\", \"{{ $json.params.id }}\"]"
+      },
+      "name": "Unqueue Timer",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { cancelled: $('Cancel Timer').item.json.params.id } }}"
+      },
+      "name": "Respond Cancel",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [850, 500]
+    }
+  ],
+  "connections": {
+    "Create Timer": {
+      "main": [[{ "node": "Build Timer", "type": "main", "index": 0 }]]
+    },
+    "Build Timer": {
+      "main": [[{ "node": "Store Timer", "type": "main", "index": 0 }]]
+    },
+    "Store Timer": {
+      "main": [[{ "node": "Queue Timer", "type": "main", "index": 0 }]]
+    },
+    "Queue Timer": {
+      "main": [[{ "node": "Respond Create", "type": "main", "index": 0 }]]
+    },
+    "Get Timer": {
+      "main": [[{ "node": "Fetch Timer", "type": "main", "index": 0 }]]
+    },
+    "Fetch Timer": {
+      "main": [[{ "node": "Respond Get", "type": "main", "index": 0 }]]
+    },
+    "Cancel Timer": {
+      "main": [[{ "node": "Delete Timer", "type": "main", "index": 0 }]]
+    },
+    "Delete Timer": {
+      "main": [[{ "node": "Unqueue Timer", "type": "main", "index": 0 }]]
+    },
+    "Unqueue Timer": {
+      "main": [[{ "node": "Respond Cancel", "type": "main", "index": 0 }]]
+    }
+  }
+}
