@@ -7,7 +7,8 @@ RUN chown -R node:node /home/node/workflows
 
 USER node
 
-# Railway injects PORT, n8n must use it
+# CRITICAL: Railway expects 8080
+ENV N8N_PORT=8080
 ENV N8N_HOST=0.0.0.0
 ENV N8N_PROTOCOL=https
 ENV GENERIC_TIMEZONE=Europe/Berlin
@@ -21,3 +22,5 @@ ENV N8N_HIRING_BANNER_ENABLED=false
 ENV N8N_RUNNERS_ENABLED=false
 
 ENV N8N_EDITOR_BASE_URL=https://n8n.exo.red
+
+EXPOSE 8080
