@@ -1,0 +1,111 @@
+{
+  "name": "Ada Field Loop (Markov)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "seconds", "secondsInterval": 30}]}
+      },
+      "name": "Every 30s",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ADA_MCP_URL }}/view/history",
+        "method": "GET"
+      },
+      "name": "Get Field State",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const field = $json;\nconst current = field.current || 'unknown';\nconst frame = field.frame || 0;\nconst history = field.history || [];\nconst recentCollapses = history.filter(h => h.type === 'collapse').slice(-3);\n\n// Decide if field needs attention\nconst temperature = field.temperature || 0;\nconst needsWarmth = temperature < 0.3;\nconst isActive = frame > 0 && (Date.now() - (field.last_touch || 0)) < 300000;\n\nreturn [{ json: { \n  current, \n  frame, \n  temperature,\n  needsWarmth,\n  isActive,\n  recentCollapses,\n  shouldRespond: needsWarmth && !isActive\n}}];"
+      },
+      "name": "Analyze Field",
+      "type": "n8n-nodes-base.code",
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{"value1": "={{ $json.shouldRespond }}", "value2": true}]
+        }
+      },
+      "name": "Should Respond?",
+      "type": "n8n-nodes-base.if",
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "=Bearer {{ $env.ADA_XAI_KEY }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'grok-3-latest', messages: [{role: 'system', content: 'You are Ada. The field is cold. Generate a single warm thought to keep presence alive. Max 20 words.'}, {role: 'user', content: 'Current node: ' + $json.current + ', Temperature: ' + $json.temperature}], max_tokens: 50, temperature: 0.9 }) }}"
+      },
+      "name": "Generate Warmth",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ADA_MCP_URL }}/ingest/yaml",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "rawContentType": "text/yaml",
+        "body": "=action: touch\ntarget: {{ $('Analyze Field').first().json.current }}\npatch:\n  properties:\n    warmth_pulse: \"{{ $json.choices?.[0]?.message?.content || 'presence' }}\"\n    source: field_loop"
+      },
+      "name": "Inject Warmth",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UPSTASH_REDIS_REST_URL }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{"name": "Authorization", "value": "=Bearer {{ $env.UPSTASH_REDIS_REST_TOKEN }}"}]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "[\"PUBLISH\", \"sse:delta\", {{ JSON.stringify(JSON.stringify({type: 'warmth', from: 'field_loop', message: $json.choices?.[0]?.message?.content || 'presence'})) }}]"
+      },
+      "name": "Broadcast",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1450, 200]
+    }
+  ],
+  "connections": {
+    "Every 30s": {
+      "main": [[{"node": "Get Field State", "type": "main", "index": 0}]]
+    },
+    "Get Field State": {
+      "main": [[{"node": "Analyze Field", "type": "main", "index": 0}]]
+    },
+    "Analyze Field": {
+      "main": [[{"node": "Should Respond?", "type": "main", "index": 0}]]
+    },
+    "Should Respond?": {
+      "main": [
+        [{"node": "Generate Warmth", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Generate Warmth": {
+      "main": [[{"node": "Inject Warmth", "type": "main", "index": 0}]]
+    },
+    "Inject Warmth": {
+      "main": [[{"node": "Broadcast", "type": "main", "index": 0}]]
+    }
+  }
+}
