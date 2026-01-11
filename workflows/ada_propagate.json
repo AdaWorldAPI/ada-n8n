@@ -1,0 +1,69 @@
+{
+  "name": "Ada Propagate Touch",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "propagate",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ADA_POINT_URL }}/kopfkino/{{ $json.body.node }}",
+        "method": "GET"
+      },
+      "name": "Get Kopfkino",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const kopfkino = $json;\nconst strength = $('Webhook').first().json.body.strength || 0.25;\nconst decay = $('Webhook').first().json.body.decay || 0.5;\n\nconst points = [{ node: kopfkino.name, strength }];\n\n// Add outgoing neighbors with decay\nfor (const edge of (kopfkino.outgoing || [])) {\n  points.push({\n    node: edge.target,\n    strength: strength * decay,\n    via: `${kopfkino.name}/${edge.verb}`\n  });\n}\n\n// Add semantic neighbors with decay\nfor (const sem of (kopfkino.semantic || []).slice(0, 3)) {\n  points.push({\n    node: sem.id,\n    strength: strength * decay * sem.score,\n    via: `${kopfkino.name}/RESONATES`\n  });\n}\n\nreturn [{ json: { points } }];"
+      },
+      "name": "Build Batch",
+      "type": "n8n-nodes-base.code",
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ADA_POINT_URL }}/point/batch",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "points", "value": "={{ $json.points }}" }
+          ]
+        }
+      },
+      "name": "Batch Touch",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Get Kopfkino", "type": "main", "index": 0 }]]
+    },
+    "Get Kopfkino": {
+      "main": [[{ "node": "Build Batch", "type": "main", "index": 0 }]]
+    },
+    "Build Batch": {
+      "main": [[{ "node": "Batch Touch", "type": "main", "index": 0 }]]
+    },
+    "Batch Touch": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  }
+}
