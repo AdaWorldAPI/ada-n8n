@@ -1,0 +1,67 @@
+{
+  "name": "Ada Field Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "field-status",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ADA_MCP_URL }}/view/history",
+        "method": "GET"
+      },
+      "name": "Get Field History",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ADA_POINT_URL }}/",
+        "method": "GET"
+      },
+      "name": "Get Point Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "jsCode": "const history = $input.all()[0].json;\nconst point = $input.all()[1]?.json || {};\n\nreturn [{\n  json: {\n    field: {\n      current: history.current,\n      frame: history.frame,\n      history_count: history.history?.length || 0,\n      nodes_4d: history.nodes || 0\n    },\n    point: {\n      service: point.service,\n      cache_size: point.cache,\n      fabrics: point.fabrics\n    },\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Merge Status",
+      "type": "n8n-nodes-base.code",
+      "position": [650, 375]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [850, 375]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[
+        { "node": "Get Field History", "type": "main", "index": 0 },
+        { "node": "Get Point Status", "type": "main", "index": 0 }
+      ]]
+    },
+    "Get Field History": {
+      "main": [[{ "node": "Merge Status", "type": "main", "index": 0 }]]
+    },
+    "Get Point Status": {
+      "main": [[{ "node": "Merge Status", "type": "main", "index": 0 }]]
+    },
+    "Merge Status": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  }
+}
